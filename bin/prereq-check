@@ -1,0 +1,80 @@
+#!/bin/bash
+
+set -e -o pipefail -u
+
+NAME="$(basename "$0")"
+
+source "$(dirname "$0")/bash-utils"
+
+# -- FUNCTIONS --
+
+# Args: None.
+check_python () {
+    if ! which python3 >/dev/null 2>&1; then
+        error "  python3 required but not found."
+        exit 1
+    elif ! which python3.6 >/dev/null 2>&1; then
+        error "  python3.6 required but not found."
+        exit 1
+    else
+        info "  Found python3, version OK."
+    fi
+}
+
+# Args: None.
+check_pipenv () {
+    if ! which pipenv >/dev/null 2>&1; then
+        error "  pipenv required but not found."
+        exit 1
+    elif [[ "$(pipenv --version | sed -nEe 's/^.* version ([0-9]+)\..*$/\1/p')" -lt 8 ]]; then
+        error "  pipenv version 8+ required but not found."
+        exit 1
+    else
+        info "  Found pipenv, version OK."
+    fi
+}
+
+# Args: None.
+check_docker () {
+    if ! which docker >/dev/null 2>&1; then
+        warn "  docker not found. Install if needed."
+        exit 1
+    elif [[ "$(docker --version | sed -nEe 's/^.* version ([0-9]+).*$/\1/p' )" -lt 17 ]]; then
+        warn "  docker version 17+ not found. Upgrade if needed."
+        exit 1
+    else
+        info "  Found docker, version OK."
+    fi
+}
+
+# -- MAIN --
+
+# Args: None.
+usage () {
+    echo "Usage: $NAME [-h|--help|help]" 1>&2
+    echo "    Checks that the software prerequisites for this repository are met." 1>&2
+}
+
+# Parse arguments.
+if [[ $# -eq 1 ]]; then
+    if [[ "$1" == "help" ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        usage
+        exit 0
+    else
+        usage
+        exit 1
+    fi
+elif [[ $# -gt 1 ]]; then
+    usage
+    exit 1
+fi
+
+# Check prerequisites are satisfied _outside_ the python virtualenv.
+if deactivate >/dev/null 2>&1; then
+    deactivate
+fi
+info "Checking prerequisites."
+check_python
+check_pipenv
+check_docker
+info "All prerequisites satisfied."

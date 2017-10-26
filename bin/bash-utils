@@ -1,0 +1,53 @@
+# Args:
+#   $1: Log level.
+#   $2 ... : Log messages.
+log () {
+    level="$1"
+    shift
+    echo -e "$level [$NAME] " "$@" 1>&2
+}
+
+# Args:
+#   $@: Log messages.
+info () {
+    log " I "  "$@"
+}
+
+# Args:
+#   $@: Log messages.
+warn () {
+    log "\033[7;33m W \033[0m" "$@"
+}
+
+# Args:
+#   $@: Log messages.
+error () {
+    log "\033[7;31m E \033[0m" "$@"
+}
+
+# Run a command, logging its output.
+# Args:
+#   $@: Command and arguments to be run.
+run () {
+    local verbose="false"
+    local failed="false"
+    if [[ "$1" == "--verbose" ]]; then
+        verbose="true"
+        shift
+        info "Running $*"
+    fi
+    if ! log=$("$@" 2>&1); then
+        failed="true"
+    fi
+    if [[ "$failed" == "true" ]] || [[ "$verbose" == "true" ]]; then
+        if [[ -n "$log" ]]; then
+            echo "$log" \
+            | while IFS='' read -r line; do
+                echo "$line"
+            done
+        fi
+    fi
+    if [[ "$failed" == "true" ]]; then
+        error "Error running $*. See above for details."
+    fi
+}
