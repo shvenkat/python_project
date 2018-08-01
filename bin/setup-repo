@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# Load common settings, global variables and functions.
+if [[ -z "${BASH_UTILS_DEFINED:-""}" ]]; then
+    # shellcheck source=bash-utils
+    source "$(dirname "$0")/bash-utils"
+fi
+
+# -- FUNCTIONS --
+
+# Print a help message, without exiting.
+# Args: None.
+function usage {
+    echo "Usage: $NAME [options]" 1>&2
+    echo "    Sets up the repository $REPO_DIR for running python applications," 1>&2
+    echo "    building docker images or contributing improvements." 1>&2
+    echo 1>&2
+    echo "Options:" 1>&2
+    echo "    --verbose         Show more detailed messages." 1>&2
+    echo "    -h|--help|help    Show this message." 1>&2
+}
+
+# Parses arguments, checks prerequisites, configures git and creates/updates the virtualenv.
+# Args:
+#   $@: Program arguments.
+function main {
+    # Parse arguments.
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h|help)
+                usage
+                exit 0
+                ;;
+            --verbose)
+                export DEBUG="true"
+                shift
+                ;;
+            *)
+                usage
+                exit 1
+                ;;
+        esac
+    done
+
+    cd "$REPO_DIR"
+
+    # Check prerequisites.
+    bin/check-prereqs
+
+    # Configure git.
+    log debug "Configuring git for this repository: $REPO_DIR"
+    run_func configure_git
+
+    # Update python environment.
+    initialize
+}
+
+# Configures the git repository as follows. Assumes the current directory is the repository root.
+#   * Sets up a pre-commit hook that runs repo-lint to enforce checks.
+#   * Sets up the top-level .gitconfig file to be used by git.
+#   * Sets up the top-level .gitattributes files to be used by git.
+# Args: None.
+function configure_git {
+    # Set up a git pre-commit hook to enforce linting at commit time.
+    local -r hook_script="bin/lint-repo"
+    local -r hook_path=".git/hooks/pre-commit"
+    if [[ ! -x "$hook_script" ]]; then
+        log error "Commit hook $hook_script not found or not executable."
+        return 1
+    fi
+    rm -f "$hook_path"
+    cat >"$hook_path" <<EOF
+#!/bin/bash
+set -e -o pipefail -u
+"$hook_script"
+EOF
+    chmod +x "$hook_path"
+
+    # Set up a gitconfig file with settings specific to this repository.
+    local config_file=".gitconfig"
+    local config_path="../.gitconfig"
+    if [[ ! -r "$config_file" ]]; then
+        log error "Config file $config_file not found."
+        return 1
+    fi
+    if ! git config --local --get-all include.path | grep -qF "$config_path"; then
+        git config --local --add include.path "$config_path"
+    fi
+
+    # Check that the top-level gitattributes file is not overridden.
+    local attributes_file=".gitattributes"
+    local untracked_attributes_file=".git/info/attributes"
+    if [[ ! -r "$attributes_file" ]]; then
+        log error "Config file $attributes_file not found."
+        return 1
+    fi
+    if [[ -r "$untracked_attributes_file" ]]; then
+        log warn "Removing untracked attributes file $untracked_attributes_file."
+        rm -f "$untracked_attributes_file"
+    fi
+}
+
+
+# -- MAIN --
+
+main "$@"

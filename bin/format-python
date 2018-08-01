@@ -1,0 +1,10 @@
+#!/bin/bash
+
+set -e -o pipefail -u
+
+if [[ $# -gt 0 ]]; then
+    echo "Error: No arguments accepted. Use stdin/stdout to pass/receive code." 1>&2
+    exit 1
+fi
+
+black --safe --py36 --line-length 100 --quiet - | isort --settings-path . --quiet -

@@ -1,53 +1,136 @@
+set -e -o pipefail -u
+
+## ---- GLOBALS ----
+
+# Avoid sourcing this file more than once.
+# shellcheck disable=SC2034
+declare -r BASH_UTILS_DEFINED=1
+
+# Script name.
+name="$(basename "$0")"
+declare -r NAME="$name"
+
+# Repository root directory.
+repo_dir="$(dirname "$(cd "$(dirname "$0")" && pwd)")"
+declare -r REPO_DIR="$repo_dir"
+
+# Location of the python virtual environment.
+declare -r VENV_DIR=".venv"
+
+# Location of the python virtual environment checksum file. This is used to skip unnecessary
+# virtualenv updates.
+declare -r VENV_CHECKSUM_FILE="${VENV_DIR}/Pipfile_checksum.txt"
+
+# Logging indent. The output of executables and shell functions can be indented to give visual
+# structure to the log and improve readability. Updated locally by the run_exec and run_func
+# functions.
+declare LOG_INDENT="${LOG_INDENT:-""}"
+
+# Whether to display debug messages.
+declare DEBUG="${DEBUG:-"false"}"
+
+
+# Aliases that allow displaying more meaningful components names in the log.
+alias mypy='python -m mypy'
+alias flake8='python -m flake8'
+
+## ---- LOGGING ----
+
+# Write a formatted message to stdout.
 # Args:
-#   $1: Log level.
-#   $2 ... : Log messages.
-log () {
+#   $1: Log level. One of: error, warn, info, debug.
+#   $2: Component name. Name of the script, a function or an executable.
+#   $3 ... : Log messages.
+function log {
+    local level message lvl
     level="$1"
     shift
-    echo -e "$level [$NAME] " "$@" 1>&2
+    message="$*"
+    if [[ "$level" == "error" ]]; then
+        lvl="\033[31mE\033[0m"
+    elif [[ "$level" == "warn" ]]; then
+        lvl="\033[33mW\033[0m"
+    elif [[ "$level" == "info" ]]; then
+        lvl=" "
+    elif [[ "$level" == "debug" ]]; then
+        lvl=" "
+    else
+        log error "$NAME" "Invalid log level '$level'."
+        return 1
+    fi
+    if [[ "$level" != "debug" ]] || [[ "$DEBUG" != "false" ]]; then
+        echo -e "${lvl} ${LOG_INDENT}${message}"
+    fi
 }
 
-# Args:
-#   $@: Log messages.
-info () {
-    log " I "  "$@"
-}
-
-# Args:
-#   $@: Log messages.
-warn () {
-    log "\033[7;33m W \033[0m" "$@"
-}
-
-# Args:
-#   $@: Log messages.
-error () {
-    log "\033[7;31m E \033[0m" "$@"
-}
-
-# Run a command, logging its output.
+# Run an executable, logging its output with increased indentation.
 # Args:
 #   $@: Command and arguments to be run.
-run () {
-    local verbose="false"
-    local failed="false"
-    if [[ "$1" == "--verbose" ]]; then
-        verbose="true"
-        shift
-        info "Running $*"
+function run_exec {
+    local output line
+    # Log the command being run.
+    log debug "Running $*"
+    # Run the command, logging its stdout and stderr with increased indent.
+    if ! output="$("$@" 2>&1)"; then
+        # Command failed. Log output and an final error message, then exit.
+        while IFS='' read -r line; do
+            if [[ -n "$line" ]]; then
+                LOG_INDENT="    $LOG_INDENT" log info "$line"
+            fi
+        done <<<"$output"
+        log error "Error running $*. See above for details."
+        return 1
+    else
+        # Command succeeded. Log output.
+        while IFS='' read -r line; do
+            if [[ -n "$line" ]]; then
+                LOG_INDENT="    $LOG_INDENT" log debug "$line"
+            fi
+        done <<<"$output"
+        return 0
     fi
-    if ! log=$("$@" 2>&1); then
-        failed="true"
-    fi
-    if [[ "$failed" == "true" ]] || [[ "$verbose" == "true" ]]; then
-        if [[ -n "$log" ]]; then
-            echo "$log" \
-            | while IFS='' read -r line; do
-                echo "$line"
-            done
+}
+
+# Run a shell function, logging its output with increased indentation. Logging and error handling
+# are deferred to the called function.
+# Args:
+#   $@: Command and arguments to be run.
+function run_func {
+    # Run the function, with increased logging indent.
+    LOG_INDENT="    $LOG_INDENT" "$@"
+}
+
+## ---- ENVIRONMENT ----
+
+# Create/update the python virtualenv and activate it.
+# Args: None.
+function update_pyvenv {
+    if ! [[ -r "$VENV_CHECKSUM_FILE" ]] \
+            || ! shasum -s -c "$VENV_CHECKSUM_FILE" >/dev/null 2>&1; then
+        # Virtual environment must be created or updated.
+        if [[ -d "$VENV_DIR" ]]; then
+            log debug "Updating python virtual env."
+        else
+            log debug "Creating python virtual env. This may take a while."
         fi
+        VIRTUAL_ENV="" PIPENV_VENV_IN_PROJECT=1 run_exec pipenv install --dev
+        shasum -p -a 256 Pipfile Pipfile.lock >"$VENV_CHECKSUM_FILE"
+    else
+        log debug "Python virtual env is up to date."
     fi
-    if [[ "$failed" == "true" ]]; then
-        error "Error running $*. See above for details."
+    # The `activate` script assumes that PS1 is defined, so define it just for this call.
+    # shellcheck source=../.venv/bin/activate
+    PS1='something' source "${VENV_DIR}/bin/activate"
+}
+
+# Place the execution context in a standard state.
+#   * Change to the repository directory.
+#   * Activate the python virtualenv, updating it if needed.
+# Args: None.
+function initialize {
+    if ! cd "$REPO_DIR"; then
+        log error "Directory $REPO_DIR not found."
+        return 1
     fi
+    update_pyvenv
 }

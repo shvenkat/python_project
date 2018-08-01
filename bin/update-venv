@@ -1,0 +1,45 @@
+#!/bin/bash
+
+if [[ -z "${BASH_UTILS_DEFINED:-""}" ]]; then
+    # shellcheck source=bash-utils
+    source "$(dirname "$0")/bash-utils"
+fi
+
+# -- FUNCTIONS --
+
+# Prints usage information to stderr. Does not exit.
+# Args: None.
+function usage {
+    cat 1>&2 <<EOF
+Usage: [options] $NAME
+
+    Creates/updates the Python virtualenv. Updates are skipped if the Pipfile has not been updated.
+
+Options:
+
+    --verbose         Show detailed information.
+    -h|--help|help    Show this help message.
+EOF
+}
+
+# -- MAIN --
+
+# Parse arguments.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --help|-h|help)
+            usage
+            exit 0
+            ;;
+        --verbose)
+            export DEBUG="true"
+            shift
+            ;;
+        *)
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+initialize

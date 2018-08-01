@@ -1,0 +1,131 @@
+#!/bin/bash
+
+if [[ -z "${BASH_UTILS_DEFINED:-""}" ]]; then
+    # shellcheck source=bash-utils
+    source "$(dirname "$0")/bash-utils"
+fi
+
+# Minimum required Python version.
+declare -r PYTHON_VERSION_MINIMUM="3.6"
+# Pinned versions of dependency management tools.
+declare -r PIP3_VERSION="10.0.1"
+declare -r PIPENV_VERSION="2018.05.18"
+
+
+# -- FUNCTIONS --
+
+# Args: None.
+function usage {
+    cat 1>&2 <<EOF
+Usage: $NAME [options]
+    Checks that the software prerequisites for this repository are met.
+
+Options:
+    --verbose         Show more detailed messages.
+    -h|--help|help    Show this message.
+EOF
+}
+
+# Parses arguments and checks prerequisites.
+# Args:
+#   $@: command arguments.
+function main {
+    # Parse arguments.
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h|help)
+                usage
+                exit 0
+                ;;
+            --verbose)
+                export DEBUG="true"
+                shift
+                ;;
+            *)
+                usage
+                exit 1
+                ;;
+        esac
+    done
+
+    # Check that prerequisites are satisfied _outside_ the python virtualenv.
+    if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+        log error "Python virtualenv $VIRTUAL_ENV detected. Run 'deactivate' first."
+        exit 1
+    fi
+
+    log debug "Checking prerequisites."
+    run_func check_python
+    run_func check_pip3
+    run_func check_pipenv
+    run_func check_latex
+    log debug "All prerequisites satisfied."
+}
+
+# Checks that the first Python in $PATH meets the minimum required version.
+# Args: None.
+function check_python {
+    if ! which python3 >/dev/null 2>&1; then
+        log error "python3 not found."
+        return 1
+    fi
+    python_version="$(python3 -V | sed -ne 's/^Python //p')"
+    if ! [[ "$python_version" > "$PYTHON_VERSION_MINIMUM" ]]; then
+        log error "Python version 3.6 or higher not found."
+        return 1
+    else
+        log debug "Found Python $python_version."
+    fi
+}
+
+# Checks that the first pip3 in $PATH matches exactly the required version.
+# Args: None.
+function check_pip3 {
+    if ! which pip3 >/dev/null 2>&1; then
+        log error "pip3 required but not found."
+        return 1
+    fi
+    pip3_version="$(pip3 --version | sed -nEe 's/^pip (.*) from .*$/\1/p')"
+    if [[ "$pip3_version" != "$PIP3_VERSION" ]]; then
+        log error "pip3 version $PIP3_VERSION required, but version $pip3_version found."
+        return 1
+    else
+        log debug "Found pip3 version $PIP3_VERSION."
+    fi
+}
+
+# Checks that the first pipenv in $PATH matches exactly the required version.
+# Args: None.
+function check_pipenv {
+    if ! which pipenv >/dev/null 2>&1; then
+        log error "pipenv required but not found."
+        return 1
+    fi
+    pipenv_version="$(pipenv --version | sed -nEe 's/^.* version (.*)$/\1/p')"
+    if [[ "$pipenv_version" != "$PIPENV_VERSION" ]]; then
+        log error "pipenv version $PIPENV_VERSION required, but version $pipenv_version found."
+        return 1
+    else
+        log debug "Found pipenv version $PIPENV_VERSION."
+    fi
+}
+
+# Checks that latex and dvipng are available in $PATH.
+# Args: None.
+function check_latex {
+    if ! which latex >/dev/null 2>&1; then
+        log warning "latex not found. You _may_ not be able to run bin/build-docs."
+    else
+        log debug "Found latex version $(latex --version | head -n1)."
+    fi
+    if ! which dvipng >/dev/null 2>&1; then
+        log warning "dvipng not found. You _may_ not be able to run bin/build-docs."
+    else
+        log debug "Found dvipng version $(dvipng --version | head -n1)."
+    fi
+}
+
+
+# -- MAIN --
+
+main "$@"

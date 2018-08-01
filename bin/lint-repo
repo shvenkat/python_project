@@ -1,0 +1,301 @@
+#!/bin/bash
+
+# Load common settings, global variables and functions.
+if [[ -z "${BASH_UTILS_DEFINED:-""}" ]]; then
+    # shellcheck source=bash-utils
+    source "$(dirname "$0")/bash-utils"
+fi
+
+
+# -- CONSTANTS --
+
+# Location of the files to be linted.
+declare -r PYTHON_DIR="src"
+declare -r DOCS_DIR="docs"
+
+# Linters. These can be run on the working tree or the index.
+declare -r -a LINTERS=("filetype" "filesize" "mypy" "flake8" "pylint" "docs")
+
+
+# -- FUNCTIONS --
+
+# Global variables to be set by enter_linting_directory.
+declare CHECK_WORK_TREE  # "true" if the working tree will be checked.
+declare ALL_FILES        # Newline-separated list of all files to be checked.
+declare CHANGED_FILES    # Newline-separated list of changed files to be checked.
+declare TEMP_DIR         # Temporary directory used to check out the index (staged changes).
+
+# Print a help message, without exiting.
+# Args: None.
+function usage {
+    cat 1>&2 <<EOF
+Usage: $NAME [options] [linters]
+
+    Checks that the tree satisfies the linting requirements of the repo.  If there are staged
+    changes, the index is checked. If not, the working tree is. If no linters are specified, all are
+    run.
+
+Linters:
+    filetype          Inclusion of non-text files.
+    filesize          Inclusion of large files.
+    mypy              Type errors.
+    flake8            Usage issues. Includes PEP8 and pyflakes checks.
+    pylint            Usage and documentation issues.
+    docs              Formatting issues in markdown documents.
+
+Options:
+    --working-tree    Check the working tree even if there are staged changes.
+    --verbose         Show more detailed messages.
+    -h|--help|help    Show this message.
+EOF
+}
+
+# Parses arguments, sets up the linting directory and runs the linters.
+# Args:
+#   $@: Program arguments.
+function main {
+    local -a linters
+
+    # Parse arguments.
+    local force_working_tree="false"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h|help)
+                usage
+                exit 0
+                ;;
+            --verbose)
+                export DEBUG="true"
+                shift
+                ;;
+            --working-tree)
+                force_working_tree="true"
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    # Change to the repository root and activate virtualenv.
+    initialize
+
+    # Enter a directory with the version of the repo files to be linted. This is either a no-op if
+    # the working tree is being linted, or a temporary directory with the staged versions of files
+    # if a proposed commit (i.e. the outcome of `git add`) is being linted. Sets the global
+    # CHECK_WORK_TREE.
+    enter_linting_directory "$force_working_tree"
+
+    # Select the linters and formatters to be run.
+    if [[ $# -gt 0 ]]; then
+        # Use linters and/or formatters specified as arguments.
+        linters=("$@")
+    else
+        # Include all linters.
+        linters=("${LINTERS[@]}")
+    fi
+
+    # Run linters.
+    for linter in "${linters[@]}"; do
+        case "$linter" in
+            mypy)
+                log debug "Checking for type errors with mypy."
+                run_func run_mypy
+                ;;
+            flake8)
+                log debug "Checking for usage issues with flake8."
+                run_func run_flake8
+                ;;
+            pylint)
+                log debug "Checking for usage and documentation issues with pylint."
+                run_func run_pylint
+                ;;
+            docs)
+                log debug "Checking documentation."
+                run_func check_docs
+                ;;
+            filetype)
+                log debug "Checking file type."
+                run_func check_filetype
+                ;;
+            filesize)
+                log debug "Checking file size."
+                run_func check_filesize
+                ;;
+            *)
+                log error "Unknown linter: $linter"
+                usage
+                exit 1
+        esac
+    done
+
+    # Clean up any temporary directory created earlier.
+    exit_linting_directory
+
+    log debug "All linters passed."
+}
+
+# Sets up the files to be linted. If there are staged changes, the index is checked out into a
+# temporary directory, which then becomes the current directory. If there is no staged content, or
+# if $1 is set to true, the working tree becomes the current directory. Sets the globals
+# CHECK_WORK_TREE, ALL_FILES, CHANGED_FILES and, if needed, TEMP_DIR.
+# Args:
+#   $1: If "true", the working tree is checked, even if there are staged changes in the index.
+function enter_linting_directory {
+    local force_working_tree="$1"
+    if git diff --cached --quiet || [[ "$force_working_tree" == "true" ]]; then
+        # Check the working tree.
+        CHECK_WORK_TREE="true"
+        ALL_FILES="$(git ls-files -cdo --exclude-standard | sort | uniq -u)"
+        # shellcheck disable=SC2034
+        CHANGED_FILES="$(git ls-files -mdo --exclude-standard | sort | uniq -u)"
+        log debug "Checking working tree."
+    else
+        # Check the index.
+        CHECK_WORK_TREE="false"
+        TEMP_DIR="$(mktemp -d)"
+        git checkout-index -a --prefix="${TEMP_DIR}/"
+        # shellcheck disable=SC2034
+        CHANGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRT)"
+        pushd "$TEMP_DIR" >/dev/null
+        ALL_FILES="$(find . -type f -print -o -type l -print)"
+        log debug "Checking index (staged changes), using temporary directory $TEMP_DIR"
+    fi
+}
+
+# Reverts the changes made by enter_linting_directory.
+# Args: None.
+function exit_linting_directory {
+    if [[ -n "${TEMP_DIR:-}" ]]; then
+        log debug "Removing temporary directory $TEMP_DIR"
+        popd >/dev/null
+        rm -rf "$TEMP_DIR"
+        unset TEMP_DIR
+    fi
+    unset ALL_FILES CHANGED_FILES
+}
+
+# Remove any temporary directory on abnormal exit.
+trap exit_linting_directory ERR EXIT
+
+# Check the type of files in the repository. Only text files are permitted. Uses the globals
+# ALL_FILES and CHANGED_FILES.
+# Args: None.
+function check_filetype {
+    local paths line
+    paths="$ALL_FILES"
+    if echo "$paths" | xargs file --mime-type -b | grep -qvE '(^text/|/x-empty$|^inode/symlink$)'; then
+        # One or more non-text file found. List these and log an error message.
+        while IFS='' read -r line; do
+            LOG_INDENT="    $LOG_INDENT" log info "$line"
+        done <<<"$(echo "$paths" | xargs file --mime-type | grep -vE '(: +text/|/x-empty$|: +inode/symlink$)')"
+        log error "Files listed above are not text files."
+        return 1
+    fi
+}
+
+# Check the individual and collective size of files in the repository. Files must be at most 100 KB
+# each and 1 MB in total. Uses the globals ALL_FILES and CHANGED_FILES.
+# Args: None.
+function check_filesize {
+    local sizes
+    local -i max_size total_size
+    sizes="$(echo "$ALL_FILES" | xargs stat -c '%s'$'\t''%n')"
+    max_size="$(echo "$sizes" | cut -f1 | sort -rn | head -n1)"
+    if [[ "$max_size" -gt 100000 ]]; then
+        # One or more large files found. List these and log an error message.
+        while IFS='' read -r line; do
+            LOG_INDENT="    $LOG_INDENT" log info "$line"
+        done <<<"$(echo "$sizes" | awk '$1 > 100000')"
+        log error "Files listed above exceed the 100 KB size limit."
+        return 1
+    fi
+    total_size="$(echo "$sizes" | cut -f1 | awk 'BEGIN { s = 0 } { s += $1 } END { print s }')"
+    if [[ "$total_size" -gt 1000000 ]]; then
+        # The working tree exceeds the limit. List the largest files and log an error
+        # message.
+        while IFS='' read -r line; do
+            LOG_INDENT="    $LOG_INDENT" log info "$line"
+        done <<<"$(echo "$sizes" | sort -k1,1rn | head -n10)"
+        log error "The working tree exceeds the 1 MB size limit. Largest files are listed above."
+        return 1
+    fi
+}
+
+# Lint the documentation files. Currently only line length is checked against the maximum in
+# .editorconfig. Lines with URIs (e.g. https://foo.bar) are exempt from this check.
+# Args: None.
+function check_docs {
+    max_line_length="$(sed -nEe 's/^max_line_length ?= ?//p' < .editorconfig)"
+    if [[ -z "$max_line_length" ]]; then
+        return
+    fi
+    find "$DOCS_DIR" -maxdepth 1 -type f -name '*.md' -print0 \
+    | while IFS="" read -r -d $'\0' file; do
+        if grep -E ".{$((max_line_length + 1))}" "$file" | grep -vq '://'; then
+            LOG_INDENT="    $LOG_INDENT" log error "Line length exceeded in $file:"
+            grep -E ".{$((max_line_length + 1))}" "$file" | grep -v '://' \
+            | while IFS="" read -r line; do
+                LOG_INDENT="        $LOG_INDENT" log info "$line"
+            done
+            return 1
+        fi
+    done
+}
+
+# Run mypy on the python source. Assumes the current directory is (a copy of) the working tree and
+# the python virtualenv is active.
+# Args:
+#   $@: (Optional) mypy arguments and/or files to be checked.
+# shellcheck disable=SC2120
+function run_mypy {
+    if ! mypy --version >/dev/null 2>&1; then
+        log error "mypy not found. Please add mypy to the Pipfile under [dev-packages]."
+        return 1
+    fi
+    local -a args=("$PYTHON_DIR")
+    if [[ $# -gt 0 ]]; then
+        args=("$@")
+    fi
+    run_exec mypy --config-file="./mypy.ini" --show-error-context "${args[@]}"
+}
+
+# Run flake8 on the python source. Assumes the current directory is (a copy of) the working tree and
+# the python virtualenv is active.
+# Args:
+#   $@: (Optional) flake8 arguments and/or files to be checked.
+# shellcheck disable=SC2120
+function run_flake8 {
+    if ! flake8 --version >/dev/null 2>&1; then
+        log error "flake8 not found. Please add flake8 to the Pipfile under [dev-packages]."
+        return 1
+    fi
+    local -a args=("$PYTHON_DIR")
+    if [[ $# -gt 0 ]]; then
+        args=("$@")
+    fi
+    run_exec flake8 --config="./.flake8" --show-source "${args[@]}"
+}
+
+# Run pylint on the python source. Assumes the current directory is (a copy of) the working tree and
+# the python virtualenv is active.
+# Args:
+#   $@: (Optional) pylint arguments and/or files to be checked.
+# shellcheck disable=SC2120
+function run_pylint {
+    if ! pylint --version >/dev/null 2>&1; then
+        log error "pylint not found. Please add pylint to the Pipfile under [dev-packages]."
+        return 1
+    fi
+    local -a args=("$PYTHON_DIR")
+    if [[ $# -gt 0 ]]; then
+        args=("$@")
+    fi
+    run_exec pylint --rcfile=./.pylintrc --reports n --output-format text --score n "${args[@]}"
+}
+
+
+# -- MAIN --
+
+main "$@"

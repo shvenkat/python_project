@@ -2,9 +2,14 @@
 python_version = "3.6"
 
 [packages]
+click = "*"
+click-completion = "*"
 
 [dev-packages]
-mypy = "==0.530"
-pycodestyle = { git = "git@github.com:PyCQA/pycodestyle", ref = "4510fa0", editable = true }
-flake8 = "==3.4.1"
-python_project = { path = ".", editable = true }
+sphinx = "*"
+mypy = "*"
+flake8 = "*"
+flake8-bugbear = "*"
+pylint = "*"
+black = "==18.5b1"
+isort = "==4.3.4"

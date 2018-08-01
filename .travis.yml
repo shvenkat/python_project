@@ -7,7 +7,7 @@ python:
 cache: pip
 
 install:
-  - pip3 install mypy==0.530 git+https://github.com/PyCQA/pycodestyle.git@4510fa0#egg=pycodestyle flake8==3.4.1
+  - pip3 install pipenv
 
 script:
-  - bin/repo-lint
+  - bin/lint-repo --verbose

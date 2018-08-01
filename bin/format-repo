@@ -1,0 +1,119 @@
+#!/bin/bash
+
+# Load common settings, global variables and functions.
+if [[ -z "${BASH_UTILS_DEFINED:-""}" ]]; then
+    # shellcheck source=bash-utils
+    source "$(dirname "$0")/bash-utils"
+fi
+
+
+# -- CONSTANTS --
+
+# Location of the files to be styled.
+declare -r PYTHON_DIR="src"
+
+# Formatters to be applied, in order of application.
+declare -r -a FORMATTERS=("black" "isort")
+
+
+# -- FUNCTIONS --
+
+# Print a help message, without exiting.
+# Args: None.
+function usage {
+    cat 1>&2 <<EOF
+Usage: $NAME [options] [formatters]
+
+    Formats Python code in the $PYTHON_DIR directory. If no formatters are specified, code is
+    formatted according to our style guide i.e. using black, followed by isort.
+
+Formatters:
+    black             Format Python code using black.
+    isort             Format 'import' statements using isort.
+
+Options:
+    --verbose         Show more detailed messages.
+    -h|--help|help    Show this message.
+EOF
+}
+
+# Parses arguments, sets up the linting directory and runs the linters.
+# Args:
+#   $@: Program arguments.
+function main {
+    # Parse arguments.
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h|help)
+                usage
+                exit 0
+                ;;
+            --verbose)
+                export DEBUG="true"
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+
+    # Change to the repository root and activate virtualenv.
+    initialize
+
+    # Select formatters and the orders in which they will be run.
+    if [[ $# -gt 0 ]]; then
+        formatters=("$@")
+    else
+        formatters=("${FORMATTERS[@]}")
+    fi
+
+    # Run formatters.
+    for formatter in "${formatters[@]}"; do
+        case "$formatter" in
+            black)
+                log debug "Running black to format python code."
+                run_func run_black
+                ;;
+            isort)
+                log debug "Running isort to format import statements."
+                run_func run_isort
+                ;;
+            *)
+                log error "Unknown formatter: $formatter"
+                usage
+                exit 1
+        esac
+    done
+}
+
+# Run black on the python source.
+# Args: None.
+function run_black {
+    if ! which black &>/dev/null; then
+        log error "black not found. Please add black to the Pipfile under [dev-packages]."
+        return 1
+    fi
+    run_exec black --safe --py36 --line-length 100 --quiet "$PYTHON_DIR"
+}
+
+# Run isort on the python source.
+# Args:
+#   $@: (Optional) isort arguments and/or files to be checked.
+# shellcheck disable=SC2120
+function run_isort {
+    if ! which isort &>/dev/null; then
+        log error "isort not found. Please add isort to the Pipfile under [dev-packages]."
+        return 1
+    fi
+    local -a args=("--recursive" "$PYTHON_DIR")
+    if [[ $# -gt 0 ]]; then
+        args=("$@")
+    fi
+    run_exec isort --settings-path . --quiet "${args[@]}"
+}
+
+
+# -- MAIN --
+
+main "$@"
